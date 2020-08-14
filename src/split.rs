@@ -1,13 +1,13 @@
-use super::*;
-// not necessary I guess
-use downcast_rs::Downcast;
-use objekt;
-pub struct SplitStruct {
+use downcast_rs::{impl_downcast, DowncastSync};
+use serde_traitobject::{Deserialize, Serialize};
+
+pub(crate) struct SplitStruct {
     index: usize,
 }
 
-pub trait Split: Downcast + objekt::Clone + Serialize + Deserialize {
+pub trait Split: DowncastSync + dyn_clone::DynClone + Serialize + Deserialize {
     fn get_index(&self) -> usize;
 }
+
 impl_downcast!(Split);
-objekt::clone_trait_object!(Split);
+dyn_clone::clone_trait_object!(Split);

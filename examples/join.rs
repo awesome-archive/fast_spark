@@ -1,9 +1,7 @@
-use fast_spark::*;
-#[macro_use]
-extern crate serde_closure;
+use vega::*;
 
-fn main() {
-    let sc = Context::new("local");
+fn main() -> Result<()> {
+    let sc = Context::new()?;
     let col1 = vec![
         (1, ("A".to_string(), "B".to_string())),
         (2, ("C".to_string(), "D".to_string())),
@@ -21,6 +19,7 @@ fn main() {
     ];
     let col2 = sc.parallelize(col2, 4);
     let inner_joined_rdd = col2.join(col1.clone(), 4);
-    let res = inner_joined_rdd.collect();
-    println!("res {:?}", res);
+    let res = inner_joined_rdd.collect().unwrap();
+    println!("result: {:?}", res);
+    Ok(())
 }

@@ -1,41 +1,36 @@
-#[macro_use]
-extern crate serde_closure;
-#[macro_use]
-extern crate itertools;
+#![allow(where_clauses_object_safety, clippy::single_component_path_imports)]
 use chrono::prelude::*;
-use fast_spark::*;
+use itertools::izip;
 use parquet::column::reader::get_typed_column_reader;
 use parquet::data_type::{ByteArrayType, Int32Type, Int64Type};
 use parquet::file::reader::{FileReader, SerializedFileReader};
-use std::fs;
-use std::fs::File;
-use std::path::Path;
+use vega::*;
 
-fn main() {
-    let sc = Context::new("local");
-    let files = fs::read_dir("parquet_file_dir")
-        .unwrap()
-        .into_iter()
-        .map(|x| x.unwrap().path().to_str().unwrap().to_owned())
-        .collect::<Vec<_>>();
-    let len = files.len();
-    let files = sc.make_rdd(files, len);
-    let read = files.flat_map(Fn!(|file| read(file)));
-    let sum = read.reduce_by_key(Fn!(|((vl, cl), (vr, cr))| (vl + vr, cl + cr)), 1);
+use std::fs::File;
+use std::path::PathBuf;
+
+fn main() -> Result<()> {
+    let context = Context::new()?;
+    let deserializer = Fn!(|file: PathBuf| read(file));
+    let files = context
+        .read_source(LocalFsReaderConfig::new("./parquet_file_dir"), deserializer)
+        .flat_map(Fn!(
+            |iter: Vec<((i32, String, i64), (i64, f64))>| Box::new(iter.into_iter())
+                as Box<dyn Iterator<Item = _>>
+        ));
+    let sum = files.reduce_by_key(Fn!(|((vl, cl), (vr, cr))| (vl + vr, cl + cr)), 1);
     let avg = sum.map(Fn!(|(k, (v, c))| (k, v as f64 / c)));
-    let res = avg.collect();
-    println!("{:?}", &res[0]);
-    sc.drop_executors();
+    let res = avg.collect().unwrap();
+    println!("result: {:?}", &res[0]);
+    Ok(())
 }
 
-fn read(file: String) -> Box<dyn Iterator<Item = ((i32, String, i64), (i64, f64))>> {
-    let file = File::open(&Path::new(&file)).unwrap();
+fn read(file: PathBuf) -> Vec<((i32, String, i64), (i64, f64))> {
+    let file = File::open(file).unwrap();
     let reader = SerializedFileReader::new(file).unwrap();
     let metadata = reader.metadata();
-    let batch_size = 5_00_000 as usize;
-    //let reader = Rc::new(RefCell::new(reader));
+    let batch_size = 500_000 as usize;
     let iter = (0..metadata.num_row_groups()).flat_map(move |i| {
-        //let reader = reader.borrow_mut();
         let row_group_reader = reader.get_row_group(i).unwrap();
         let mut first_reader =
             get_typed_column_reader::<Int32Type>(row_group_reader.get_column_reader(0).unwrap());
@@ -47,7 +42,7 @@ fn read(file: String) -> Box<dyn Iterator<Item = ((i32, String, i64), (i64, f64)
         let mut time_reader =
             get_typed_column_reader::<Int64Type>(row_group_reader.get_column_reader(8).unwrap());
         let num_rows = metadata.row_group(i).num_rows() as usize;
-        println!("row group rows {}", num_rows);
+        println!("num group rows: {}", num_rows);
         let mut chunks = vec![];
         let mut batch_count = 0 as usize;
         while batch_count < num_rows {
@@ -59,7 +54,7 @@ fn read(file: String) -> Box<dyn Iterator<Item = ((i32, String, i64), (i64, f64)
             chunks.push((begin, end));
             batch_count = end;
         }
-        println!("total rows-{} chunks-{:?}", num_rows, chunks);
+        println!("total rows: {}, chunks: {:?}", num_rows, chunks);
         chunks.into_iter().flat_map(move |(begin, end)| {
             let end = end as usize;
             let begin = begin as usize;
@@ -85,7 +80,7 @@ fn read(file: String) -> Box<dyn Iterator<Item = ((i32, String, i64), (i64, f64)
                 .map(|x| unsafe { String::from_utf8_unchecked(x.data().to_vec()) });
             let time = time.into_iter().map(|t| {
                 let t = t / 1000;
-                Utc.timestamp(t, 0).hour() as i64
+                i64::from(Utc.timestamp(t, 0).hour())
             });
             let bytes = bytes.into_iter().map(|b| (b, 1.0));
             let key = izip!(first, second, time);
@@ -93,5 +88,5 @@ fn read(file: String) -> Box<dyn Iterator<Item = ((i32, String, i64), (i64, f64)
             key.zip(value)
         })
     });
-    Box::new(iter)
+    iter.collect()
 }
